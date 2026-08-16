@@ -29,12 +29,16 @@ import os
 import random
 from pathlib import Path
 
-from telegram import Update
+from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
+
+from quotes_data import QUOTE_LIBRARY
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -161,7 +165,17 @@ CATEGORIES = {
     },
 }
 
+# Merge the large auto-sourced quote library on top of the hand-picked lines above,
+# so each category has hundreds of options instead of repeating quickly.
+for _key, _extra in QUOTE_LIBRARY.items():
+    if _key in CATEGORIES:
+        CATEGORIES[_key]["items"].extend(_extra)
+
 FALLBACK_TEXT = "Take a breath. You're doing better than you think."
+
+# Tracks the last quote index shown per category, globally, so consecutive
+# sends (across all users) don't repeat the same line back-to-back.
+_last_shown_index = {}
 
 # ---------------------------------------------------------------------------
 # User storage (very simple JSON file; swap for a real DB if you scale up)
@@ -185,7 +199,17 @@ def get_content(category_key: str) -> str:
     category = CATEGORIES.get(category_key)
     if not category:
         return FALLBACK_TEXT
-    text = random.choice(category["items"])
+    items = category["items"]
+    if len(items) > 1:
+        # Avoid repeating the exact same line that was just shown.
+        last_index = _last_shown_index.get(category_key)
+        index = random.randrange(len(items))
+        while index == last_index:
+            index = random.randrange(len(items))
+        _last_shown_index[category_key] = index
+        text = items[index]
+    else:
+        text = items[0] if items else FALLBACK_TEXT
     return f"{category['emoji']} {category['label']}\n\n{text}"
 
 
@@ -201,7 +225,28 @@ COMMAND_LIST_TEXT = (
     "❤️ /relationships - Relationships\n"
     "🧠 /mindset - Mindset\n"
     "🌙 /night - Night Reflection\n"
-    "/stop - unsubscribe from daily messages"
+    "/stop - unsubscribe from daily messages\n\n"
+    "Tip: you can also just tap a button below instead of typing a command."
+)
+
+# Maps the exact text shown on each menu button back to its category key,
+# so tapping a button works exactly like typing the matching command.
+BUTTON_LABELS = {
+    "💬 Today's Quote": "today",
+    "🌱 Life Advice": "advice",
+    "💪 Motivation": "motivation",
+    "❤️ Relationships": "relationships",
+    "🧠 Mindset": "mindset",
+    "🌙 Night Reflection": "night",
+}
+
+MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["💬 Today's Quote", "🌱 Life Advice"],
+        ["💪 Motivation", "❤️ Relationships"],
+        ["🧠 Mindset", "🌙 Night Reflection"],
+    ],
+    resize_keyboard=True,
 )
 
 
@@ -210,7 +255,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     users.add(update.effective_chat.id)
     save_users(users)
     await update.message.reply_text(
-        f"Welcome! You're now subscribed to daily quotes and advice.\n\n{COMMAND_LIST_TEXT}"
+        f"Welcome! You're now subscribed to daily quotes and advice.\n\n{COMMAND_LIST_TEXT}",
+        reply_markup=MENU_KEYBOARD,
     )
 
 
@@ -225,6 +271,12 @@ async def category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # context.chat_data / job stores which category via the command itself
     command = update.message.text.split()[0].lstrip("/").split("@")[0]
     await update.message.reply_text(get_content(command))
+
+
+async def menu_button_pressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    category_key = BUTTON_LABELS.get(update.message.text)
+    if category_key:
+        await update.message.reply_text(get_content(category_key))
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +314,7 @@ def main() -> None:
     app.add_handler(CommandHandler("stop", stop))
     for key in CATEGORIES:
         app.add_handler(CommandHandler(key, category_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_button_pressed))
 
     # Schedule the daily job
     from datetime import time as dtime
@@ -276,3 +329,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+       
