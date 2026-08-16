@@ -1,12 +1,16 @@
 """
-Telegram Daily Quotes & Advice Bot
------------------------------------
+LifeSpark - Telegram Daily Quotes & Advice Bot
+-----------------------------------------------
 Features:
-- /start   -> registers the user for daily broadcasts
-- /stop    -> unsubscribes the user
-- /quote   -> sends a random quote on demand
-- /advice  -> sends a random piece of advice on demand
-- Daily job -> automatically sends a quote to every subscribed user
+- /start          -> registers the user for the daily broadcast
+- /stop           -> unsubscribes the user
+- /today          -> Today's Quote
+- /advice         -> Life Advice
+- /motivation     -> Motivation
+- /relationships  -> Relationships
+- /mindset        -> Mindset
+- /night          -> Night Reflection
+- Daily job       -> automatically sends "Today's Quote" to every subscribed user
 
 SETUP:
 1. pip install -r requirements.txt
@@ -15,8 +19,8 @@ SETUP:
 3. Run: python bot.py
 
 Users are stored in users.json (chat IDs of everyone who has /start'd the bot).
-Quotes come from the free ZenQuotes API (https://zenquotes.io), with a small
-local fallback list in case the API is unreachable.
+Content is a curated local library per category, so it works instantly with
+no external API dependency (fast and always available).
 """
 
 import json
@@ -25,7 +29,6 @@ import os
 import random
 from pathlib import Path
 
-import requests
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -45,28 +48,120 @@ if not BOT_TOKEN:
     )
 
 USERS_FILE = Path(__file__).parent / "users.json"
-DAILY_HOUR_UTC = 8  # what time (UTC) the daily broadcast goes out; change as you like
+
+# Daily broadcast time, in UTC. 7:00 UTC = 8:00 AM in Nigeria (WAT, UTC+1).
+DAILY_HOUR_UTC = 7
+DAILY_MINUTE_UTC = 0
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-FALLBACK_QUOTES = [
-    "The best time to plant a tree was 20 years ago. The second best time is now.",
-    "You don't have to be great to start, but you have to start to be great.",
-    "Difficult roads often lead to beautiful destinations.",
-    "Small steps every day add up to big results.",
-    "Your future is created by what you do today, not tomorrow.",
-]
+# ---------------------------------------------------------------------------
+# Content library
+# ---------------------------------------------------------------------------
 
-FALLBACK_ADVICE = [
-    "Focus on progress, not perfection.",
-    "Say no to things that don't align with your goals.",
-    "Rest is productive too. Don't skip it.",
-    "Write down your goals. It makes them real.",
-    "Ask for help before you're overwhelmed, not after.",
-]
+CATEGORIES = {
+    "today": {
+        "label": "Today's Quote",
+        "emoji": "💬",
+        "items": [
+            "The best time to plant a tree was 20 years ago. The second best time is now.",
+            "You don't have to be great to start, but you have to start to be great.",
+            "Difficult roads often lead to beautiful destinations.",
+            "Small steps every day add up to big results.",
+            "Your future is created by what you do today, not tomorrow.",
+            "What lies behind you and what lies ahead matter less than what lies within you.",
+            "Do what you can, with what you have, where you are.",
+            "It always seems impossible until it's done.",
+            "The only way to do great work is to love what you do.",
+            "Turn your wounds into wisdom.",
+        ],
+    },
+    "advice": {
+        "label": "Life Advice",
+        "emoji": "🌱",
+        "items": [
+            "Focus on progress, not perfection.",
+            "Say no to things that don't align with your goals.",
+            "Rest is productive too. Don't skip it.",
+            "Write down your goals. It makes them real.",
+            "Ask for help before you're overwhelmed, not after.",
+            "Don't compare your chapter one to someone else's chapter twenty.",
+            "Protect your peace like it's your job, because it is.",
+            "You can't pour from an empty cup. Take care of yourself first.",
+            "Slow progress is still progress. Keep going.",
+            "Choose your battles. Not everything deserves your energy.",
+        ],
+    },
+    "motivation": {
+        "label": "Motivation",
+        "emoji": "💪",
+        "items": [
+            "Push yourself, because no one else is going to do it for you.",
+            "Great things never came from comfort zones.",
+            "Dream it. Believe it. Build it.",
+            "The pain of discipline weighs ounces, the pain of regret weighs tons.",
+            "Success is the sum of small efforts repeated daily.",
+            "You are capable of more than you know.",
+            "Don't stop when you're tired. Stop when you're done.",
+            "Every accomplishment starts with the decision to try.",
+            "Discipline is choosing between what you want now and what you want most.",
+            "Wake up with determination, go to bed with satisfaction.",
+        ],
+    },
+    "relationships": {
+        "label": "Relationships",
+        "emoji": "❤️",
+        "items": [
+            "The best relationships are built on honesty, even when it's uncomfortable.",
+            "Listen to understand, not just to reply.",
+            "Show up for people consistently, not just when it's convenient.",
+            "A good relationship gives you freedom, not control.",
+            "Say what you mean, and mean what you say, kindly.",
+            "The people who matter will always make time for you.",
+            "Love grows where forgiveness lives.",
+            "Healthy relationships take work from both sides, not just one.",
+            "Be someone's safe place, not another source of stress.",
+            "Real connection is built in the small, everyday moments.",
+        ],
+    },
+    "mindset": {
+        "label": "Mindset",
+        "emoji": "🧠",
+        "items": [
+            "Your mindset shapes your reality more than your circumstances do.",
+            "Whether you think you can or think you can't, you're right.",
+            "A fixed mindset says 'I can't'. A growth mindset says 'not yet'.",
+            "Change the way you look at things, and the things you look at change.",
+            "Your thoughts become your words, your words become your actions.",
+            "Replace 'I have to' with 'I get to'. It changes everything.",
+            "The mind is everything. What you think, you become.",
+            "Train your mind to see the good in every situation.",
+            "You are not your thoughts. You are the one who notices them.",
+            "Progress starts with believing change is possible.",
+        ],
+    },
+    "night": {
+        "label": "Night Reflection",
+        "emoji": "🌙",
+        "items": [
+            "Today is done. Let it go, and rest well.",
+            "You showed up today. That's enough.",
+            "Not every day will be perfect, and that's okay.",
+            "Reflect on one good thing that happened today before you sleep.",
+            "Tomorrow is a fresh page. Tonight, just rest.",
+            "Forgive yourself for today's mistakes. Growth isn't linear.",
+            "Close the day with gratitude, not regret.",
+            "You did your best with what you had today.",
+            "Let go of what you can't control, and rest in what you can.",
+            "Sleep well. You've earned it.",
+        ],
+    },
+}
+
+FALLBACK_TEXT = "Take a breath. You're doing better than you think."
 
 # ---------------------------------------------------------------------------
 # User storage (very simple JSON file; swap for a real DB if you scale up)
@@ -83,44 +178,39 @@ def save_users(users: set[int]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Content fetchers
+# Content picker
 # ---------------------------------------------------------------------------
 
-def get_quote() -> str:
-    try:
-        resp = requests.get("https://zenquotes.io/api/random", timeout=5)
-        resp.raise_for_status()
-        data = resp.json()[0]
-        return f'"{data["q"]}" — {data["a"]}'
-    except Exception as e:
-        logger.warning("Quote API failed, using fallback: %s", e)
-        return random.choice(FALLBACK_QUOTES)
-
-
-def get_advice() -> str:
-    try:
-        resp = requests.get("https://api.adviceslip.com/advice", timeout=5)
-        resp.raise_for_status()
-        return resp.json()["slip"]["advice"]
-    except Exception as e:
-        logger.warning("Advice API failed, using fallback: %s", e)
-        return random.choice(FALLBACK_ADVICE)
+def get_content(category_key: str) -> str:
+    category = CATEGORIES.get(category_key)
+    if not category:
+        return FALLBACK_TEXT
+    text = random.choice(category["items"])
+    return f"{category['emoji']} {category['label']}\n\n{text}"
 
 
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
 
+COMMAND_LIST_TEXT = (
+    "Commands:\n"
+    "💬 /today - Today's Quote\n"
+    "🌱 /advice - Life Advice\n"
+    "💪 /motivation - Motivation\n"
+    "❤️ /relationships - Relationships\n"
+    "🧠 /mindset - Mindset\n"
+    "🌙 /night - Night Reflection\n"
+    "/stop - unsubscribe from daily messages"
+)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     users = load_users()
     users.add(update.effective_chat.id)
     save_users(users)
     await update.message.reply_text(
-        "Welcome! You're now subscribed to daily quotes and advice.\n\n"
-        "Commands:\n"
-        "/quote - get a random quote\n"
-        "/advice - get a random piece of advice\n"
-        "/stop - unsubscribe from daily messages"
+        f"Welcome! You're now subscribed to daily quotes and advice.\n\n{COMMAND_LIST_TEXT}"
     )
 
 
@@ -131,12 +221,10 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("You've been unsubscribed from daily messages. Send /start anytime to rejoin.")
 
 
-async def quote_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(get_quote())
-
-
-async def advice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(get_advice())
+async def category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # context.chat_data / job stores which category via the command itself
+    command = update.message.text.split()[0].lstrip("/").split("@")[0]
+    await update.message.reply_text(get_content(command))
 
 
 # ---------------------------------------------------------------------------
@@ -149,12 +237,12 @@ async def send_daily_broadcast(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info("No subscribed users, skipping daily broadcast.")
         return
 
-    message = get_quote()
+    message = get_content("today")
     logger.info("Sending daily broadcast to %d users", len(users))
 
     for chat_id in list(users):
         try:
-            await context.bot.send_message(chat_id=chat_id, text=f"Your daily quote:\n\n{message}")
+            await context.bot.send_message(chat_id=chat_id, text=message)
         except Exception as e:
             # If a user blocked the bot, remove them so we stop retrying
             logger.warning("Failed to message %s: %s", chat_id, e)
@@ -172,13 +260,15 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stop", stop))
-    app.add_handler(CommandHandler("quote", quote_cmd))
-    app.add_handler(CommandHandler("advice", advice_cmd))
+    for key in CATEGORIES:
+        app.add_handler(CommandHandler(key, category_cmd))
 
     # Schedule the daily job
     from datetime import time as dtime
 
-    app.job_queue.run_daily(send_daily_broadcast, time=dtime(hour=DAILY_HOUR_UTC, minute=0))
+    app.job_queue.run_daily(
+        send_daily_broadcast, time=dtime(hour=DAILY_HOUR_UTC, minute=DAILY_MINUTE_UTC)
+    )
 
     logger.info("Bot starting...")
     app.run_polling()
